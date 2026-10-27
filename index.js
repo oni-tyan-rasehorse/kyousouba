@@ -1,0 +1,1206 @@
+(function(){
+  const KANJI = {
+    P:'歩', L:'香', N:'桂', S:'銀', G:'金', B:'角', R:'飛', K_sente:'王', K_gote:'玉'
+  };
+  const KANJI_PROMOTED = {
+    P:'と', L:'成香', N:'成桂', S:'成銀', B:'王', R:'竜'
+  };
+  const ANIMAL_ICON = {
+    P:'🐣', L:'🦒', N:'🦓', S:'🐺', G:'🐻', B:'🐘', R:'🦅', K:'🐴'
+  };
+  const BUDDY_LIST = [
+    {id:'lion', icon:'🦁', name:'ライオン', wiki:'Lion'},
+    {id:'elephant', icon:'🐘', name:'ゾウ', wiki:'Elephant'},
+    {id:'giraffe', icon:'🦒', name:'キリン', wiki:'Giraffe'},
+    {id:'zebra', icon:'🦓', name:'シマウマ', wiki:'Plains zebra'},
+    {id:'bear', icon:'🐻', name:'クマ', wiki:'Brown bear'},
+    {id:'wolf', icon:'🐺', name:'オオカミ', wiki:'Gray wolf'},
+    {id:'eagle', icon:'🦅', name:'タカ', wiki:'Bald eagle'},
+    {id:'chick', icon:'🐣', name:'ひよこ', wiki:'Chicken'},
+    {id:'panda', icon:'🐼', name:'パンダ', wiki:'Giant panda'},
+    {id:'monkey', icon:'🐵', name:'サル', wiki:'Japanese macaque'},
+    {id:'penguin', icon:'🐧', name:'ペンギン', wiki:'Penguin'},
+    {id:'tiger', icon:'🐯', name:'トラ', wiki:'Tiger'}
+  ];
+  function buddyById(id){ return BUDDY_LIST.find(b=>b.id===id) || BUDDY_LIST[0]; }
+
+  const BOSS_HORSES = [
+    {name:'シンボリルドルフ', wiki:'Symboli Rudolf'},
+    {name:'オグリキャップ', wiki:'Oguri Cap'},
+    {name:'ディープインパクト', wiki:'Deep Impact (horse)'},
+    {name:'トウカイテイオー', wiki:'Tokai Teio'},
+    {name:'メジロマックイーン', wiki:'Mejiro McQueen'},
+    {name:'ナリタブライアン', wiki:'Narita Brian'},
+    {name:'キタサンブラック', wiki:'Kitasan Black'},
+    {name:'オルフェーヴル', wiki:'Orfevre'},
+    {name:'ウオッカ', wiki:'Vodka (horse)'},
+    {name:'ジェンティルドンナ', wiki:'Gentildonna'},
+    {name:'ゴールドシップ', wiki:'Gold Ship'},
+    {name:'テイエムオペラオー', wiki:'T M Opera O'},
+    {name:'サイレンススズカ', wiki:'Silence Suzuka'},
+    {name:'スペシャルウィーク', wiki:'Special Week (horse)'},
+    {name:'アーモンドアイ', wiki:'Almond Eye'},
+    {name:'タイキシャトル', wiki:'Taiki Shuttle'}
+  ];
+  function pickBossHorse(){
+    return BOSS_HORSES[Math.floor(Math.random()*BOSS_HORSES.length)];
+  }
+
+  // ---------- animal photo fetching (Wikipedia thumbnails, with emoji fallback) ----------
+  const ANIMAL_PHOTO_CACHE = {};
+  async function fetchAnimalPhoto(title){
+    if(Object.prototype.hasOwnProperty.call(ANIMAL_PHOTO_CACHE, title)) return ANIMAL_PHOTO_CACHE[title];
+    try{
+      const url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=pageimages&format=json&pithumbsize=240&redirects=1&origin=*`;
+      const res = await fetch(url);
+      const data = await res.json();
+      const pages = data && data.query && data.query.pages;
+      const page = pages && Object.values(pages)[0];
+      const thumb = page && page.thumbnail && page.thumbnail.source;
+      ANIMAL_PHOTO_CACHE[title] = thumb || null;
+      return thumb || null;
+    } catch(e){
+      return null;
+    }
+  }
+  function placeholderPhotoUrl(emoji){
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><rect width='100%' height='100%' rx='24' fill='#f4e3b8'/><text x='50%' y='56%' font-size='108' text-anchor='middle' dominant-baseline='middle'>${emoji}</text></svg>`;
+    return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  }
+  // 競走馬の写真は著作権の都合で使わず、真っ黒な画像を表示する
+  const BLACK_PHOTO_URL = 'data:image/svg+xml;utf8,' + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><rect width='100%' height='100%' fill='#000'/></svg>");
+  function setBossBlackPhoto(img){
+    img.onerror = null;
+    img.src = BLACK_PHOTO_URL;
+  }
+
+  function setAnimalPhoto(img, wikiTitle, emojiFallback){
+    img.src = placeholderPhotoUrl(emojiFallback);
+    img.onerror = ()=>{ img.onerror = null; img.src = placeholderPhotoUrl(emojiFallback); };
+    fetchAnimalPhoto(wikiTitle).then(url=>{
+      if(url) img.src = url;
+    });
+  }
+
+  const DROP_ORDER = ['R','B','G','S','N','L','P'];
+  const PIECE_VALUE = {P:1,L:3,N:4,S:5,G:6,B:8,R:10,K:10000};
+  const PROMOTED_VALUE = {P:6,L:6,N:6,S:6,B:10,R:12};
+  const WIN_SCORE = 1000000;
+
+  // ---------- animal cry sounds (richer synthesized sounds, no audio files needed) ----------
+  let audioCtx = null;
+  function getAudioCtx(){
+    try{
+      if(!audioCtx){
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if(audioCtx.state === 'suspended'){ audioCtx.resume().catch(()=>{}); }
+      return audioCtx;
+    } catch(e){
+      return null;
+    }
+  }
+
+  function makeNoiseBuffer(ctx, duration){
+    const size = Math.max(1, Math.floor(ctx.sampleRate * duration));
+    const buffer = ctx.createBuffer(1, size, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for(let i=0;i<size;i++){ data[i] = Math.random()*2 - 1; }
+    return buffer;
+  }
+  function makeDistortionCurve(amount){
+    const k = typeof amount==='number' ? amount : 30;
+    const n = 44100;
+    const curve = new Float32Array(n);
+    const deg = Math.PI/180;
+    for(let i=0;i<n;i++){
+      const x = i*2/n - 1;
+      curve[i] = (3+k)*x*20*deg / (Math.PI + k*Math.abs(x));
+    }
+    return curve;
+  }
+  function pulseEnv(gainNode, now, attack, peak, holdTo, sustain, end){
+    gainNode.gain.cancelScheduledValues(now);
+    gainNode.gain.setValueAtTime(0.0001, now);
+    gainNode.gain.exponentialRampToValueAtTime(peak, now+attack);
+    if(holdTo!==undefined && sustain!==undefined){
+      gainNode.gain.exponentialRampToValueAtTime(sustain, holdTo);
+    }
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, end);
+  }
+
+  function cryChick(ctx, now){
+    for(let i=0;i<3;i++){
+      const t0 = now + i*0.16;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(1000, t0);
+      osc.frequency.exponentialRampToValueAtTime(1800, t0+0.09);
+      osc.frequency.exponentialRampToValueAtTime(1300, t0+0.14);
+      pulseEnv(gain, t0, 0.015, 0.24, t0+0.07, 0.12, t0+0.15);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t0); osc.stop(t0+0.17);
+    }
+  }
+
+  function cryGiraffe(ctx, now){
+    const dur = 1.0;
+    const osc = ctx.createOscillator();
+    const lfo = ctx.createOscillator();
+    const lfoGain = ctx.createGain();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(150, now);
+    osc.frequency.exponentialRampToValueAtTime(95, now+dur);
+    lfo.frequency.value = 4.5; lfoGain.gain.value = 5;
+    lfo.connect(lfoGain); lfoGain.connect(osc.frequency);
+    pulseEnv(gain, now, 0.2, 0.18, now+dur*0.6, 0.08, now+dur);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(now); lfo.start(now);
+    osc.stop(now+dur+0.05); lfo.stop(now+dur+0.05);
+  }
+
+  function cryZebra(ctx, now){
+    for(let i=0;i<3;i++){
+      const t0 = now + i*0.19;
+      const d = 0.18;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(360+i*30, t0);
+      osc.frequency.exponentialRampToValueAtTime(680+i*30, t0+d*0.55);
+      osc.frequency.exponentialRampToValueAtTime(420+i*30, t0+d);
+      pulseEnv(gain, t0, 0.02, 0.26, t0+d*0.5, 0.1, t0+d);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t0); osc.stop(t0+d+0.02);
+    }
+    const noiseDur = 0.85;
+    const noise = ctx.createBufferSource();
+    noise.buffer = makeNoiseBuffer(ctx, noiseDur);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 550; bp.Q.value = 0.6;
+    const ng = ctx.createGain();
+    pulseEnv(ng, now, 0.05, 0.07, now+noiseDur*0.6, 0.03, now+noiseDur);
+    noise.connect(bp); bp.connect(ng); ng.connect(ctx.destination);
+    noise.start(now); noise.stop(now+noiseDur);
+  }
+
+  function cryWolf(ctx, now){
+    const dur = 1.7;
+    const osc = ctx.createOscillator();
+    const lp = ctx.createBiquadFilter();
+    const gain = ctx.createGain();
+    const delay = ctx.createDelay();
+    const feedback = ctx.createGain();
+    const delayFilter = ctx.createBiquadFilter();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(240, now);
+    osc.frequency.linearRampToValueAtTime(560, now+dur*0.3);
+    osc.frequency.linearRampToValueAtTime(420, now+dur*0.65);
+    osc.frequency.linearRampToValueAtTime(300, now+dur);
+    lp.type = 'lowpass'; lp.frequency.value = 1100;
+    pulseEnv(gain, now, 0.3, 0.26, now+dur*0.75, 0.09, now+dur);
+    delay.delayTime.value = 0.24;
+    feedback.gain.value = 0.32;
+    delayFilter.type = 'lowpass'; delayFilter.frequency.value = 1400;
+    osc.connect(lp); lp.connect(gain);
+    gain.connect(ctx.destination);
+    gain.connect(delay); delay.connect(delayFilter); delayFilter.connect(feedback); feedback.connect(delay);
+    delay.connect(ctx.destination);
+    osc.start(now); osc.stop(now+dur+0.4);
+  }
+
+  function cryBear(ctx, now){
+    const dur = 0.9;
+    const osc = ctx.createOscillator();
+    const shaper = ctx.createWaveShaper();
+    const makeup = ctx.createGain();
+    const lp = ctx.createBiquadFilter();
+    const gain = ctx.createGain();
+    const lfo = ctx.createOscillator();
+    const lfoGain = ctx.createGain();
+    shaper.curve = makeDistortionCurve(28);
+    makeup.gain.value = 3.2; // the waveshaper curve attenuates the signal a lot; compensate
+    lp.type = 'lowpass'; lp.frequency.value = 650;
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(130, now);
+    osc.frequency.linearRampToValueAtTime(75, now+dur);
+    lfo.frequency.value = 13; lfoGain.gain.value = 10;
+    lfo.connect(lfoGain); lfoGain.connect(osc.frequency);
+    pulseEnv(gain, now, 0.1, 0.55, now+dur*0.6, 0.18, now+dur);
+    osc.connect(shaper); shaper.connect(makeup); makeup.connect(lp); lp.connect(gain); gain.connect(ctx.destination);
+    osc.start(now); lfo.start(now);
+    osc.stop(now+dur+0.05); lfo.stop(now+dur+0.05);
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = makeNoiseBuffer(ctx, dur);
+    const nlp = ctx.createBiquadFilter();
+    nlp.type = 'lowpass'; nlp.frequency.value = 350;
+    const ng = ctx.createGain();
+    pulseEnv(ng, now, 0.12, 0.22, now+dur*0.6, 0.07, now+dur);
+    noise.connect(nlp); nlp.connect(ng); ng.connect(ctx.destination);
+    noise.start(now); noise.stop(now+dur);
+  }
+
+  function cryElephant(ctx, now){
+    const dur = 1.1;
+    const osc = ctx.createOscillator();
+    const osc2 = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const lfo = ctx.createOscillator();
+    const lfoGain = ctx.createGain();
+    osc.type = 'sawtooth'; osc2.type = 'square';
+    osc.frequency.setValueAtTime(180, now);
+    osc.frequency.linearRampToValueAtTime(440, now+0.22);
+    osc.frequency.linearRampToValueAtTime(260, now+dur);
+    osc2.frequency.setValueAtTime(90, now);
+    osc2.frequency.linearRampToValueAtTime(220, now+0.22);
+    osc2.frequency.linearRampToValueAtTime(130, now+dur);
+    lfo.frequency.value = 20; lfoGain.gain.value = 16;
+    lfo.connect(lfoGain); lfoGain.connect(osc.frequency);
+    pulseEnv(gain, now, 0.07, 0.28, now+dur*0.6, 0.11, now+dur);
+    osc.connect(gain); osc2.connect(gain); gain.connect(ctx.destination);
+    osc.start(now); osc2.start(now); lfo.start(now);
+    osc.stop(now+dur+0.05); osc2.stop(now+dur+0.05); lfo.stop(now+dur+0.05);
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = makeNoiseBuffer(ctx, 0.18);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 650; bp.Q.value = 0.8;
+    const ng = ctx.createGain();
+    pulseEnv(ng, now, 0.02, 0.17, now+0.1, 0.05, now+0.18);
+    noise.connect(bp); bp.connect(ng); ng.connect(ctx.destination);
+    noise.start(now); noise.stop(now+0.18);
+  }
+
+  function cryEagle(ctx, now){
+    const dur = 0.6;
+    const noise = ctx.createBufferSource();
+    noise.buffer = makeNoiseBuffer(ctx, dur);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(3200, now);
+    bp.frequency.exponentialRampToValueAtTime(1700, now+dur);
+    bp.Q.value = 7;
+    const ng = ctx.createGain();
+    pulseEnv(ng, now, 0.02, 0.2, now+dur*0.5, 0.06, now+dur);
+    noise.connect(bp); bp.connect(ng); ng.connect(ctx.destination);
+    noise.start(now); noise.stop(now+dur);
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(2800, now);
+    osc.frequency.exponentialRampToValueAtTime(1300, now+dur);
+    pulseEnv(gain, now, 0.02, 0.16, now+dur*0.5, 0.04, now+dur);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(now); osc.stop(now+dur+0.03);
+  }
+
+  function cryHorse(ctx, now){
+    const dur = 1.1;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const lfo = ctx.createOscillator();
+    const lfoGain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(480, now);
+    osc.frequency.exponentialRampToValueAtTime(900, now+0.12);
+    osc.frequency.exponentialRampToValueAtTime(330, now+dur);
+    lfo.frequency.value = 26; lfoGain.gain.value = 55;
+    lfo.connect(lfoGain); lfoGain.connect(osc.frequency);
+    pulseEnv(gain, now, 0.05, 0.26, now+dur*0.65, 0.08, now+dur);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(now); lfo.start(now);
+    osc.stop(now+dur+0.05); lfo.stop(now+dur+0.05);
+  }
+
+  const CRY_FUNCTIONS = {
+    P: cryChick, L: cryGiraffe, N: cryZebra, S: cryWolf,
+    G: cryBear, B: cryElephant, R: cryEagle, K: cryHorse
+  };
+  function playAnimalCry(pieceType){
+    if(!state.soundOn) return;
+    const ctx = getAudioCtx();
+    if(!ctx) return;
+    const fn = CRY_FUNCTIONS[pieceType];
+    if(!fn) return;
+    try{
+      fn(ctx, ctx.currentTime);
+    } catch(e){ /* ignore audio errors */ }
+  }
+
+  function forwardDir(owner){ return owner==='sente' ? -1 : 1; }
+
+  function stepOffsets(type, owner){
+    const f = forwardDir(owner);
+    switch(type){
+      case 'P': return [[f,0]];
+      case 'N': return [[2*f,-1],[2*f,1]];
+      case 'S': return [[f,-1],[f,0],[f,1],[-f,-1],[-f,1]];
+      case 'G': return [[f,-1],[f,0],[f,1],[0,-1],[0,1],[-f,0]];
+      case 'K': return [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+      default: return [];
+    }
+  }
+
+  function isPromotedGoldLike(piece){
+    return piece.promoted && ['P','L','N','S'].includes(piece.type);
+  }
+
+  function inBounds(r,c){ return r>=0 && r<9 && c>=0 && c<9; }
+
+  function isPromotionZone(owner, row){
+    return owner==='sente' ? row<=2 : row>=6;
+  }
+  function isLastRow(owner, row){
+    return owner==='sente' ? row===0 : row===8;
+  }
+  function isLastTwoRows(owner, row){
+    return owner==='sente' ? row<=1 : row>=7;
+  }
+
+  function freshBoard(){
+    const b = Array.from({length:9},()=>Array(9).fill(null));
+    const backRow = ['L','N','S','G','K','G','S','N','L'];
+    for(let c=0;c<9;c++){
+      b[0][c] = {type:backRow[c], owner:'gote', promoted:false};
+      b[8][c] = {type:backRow[c], owner:'sente', promoted:false};
+    }
+    for(let c=0;c<9;c++){
+      b[2][c] = {type:'P', owner:'gote', promoted:false};
+      b[6][c] = {type:'P', owner:'sente', promoted:false};
+    }
+    b[1][1] = {type:'B', owner:'gote', promoted:false};
+    b[1][7] = {type:'R', owner:'gote', promoted:false};
+    b[7][1] = {type:'R', owner:'sente', promoted:false};
+    b[7][7] = {type:'B', owner:'sente', promoted:false};
+    return b;
+  }
+
+  let state = {
+    mode:'cpu',
+    playerColor:'sente',
+    difficulty:'normal',
+    board: freshBoard(),
+    turn: 'sente',
+    captured: { sente:{}, gote:{} },
+    selected: null,
+    legalTargets: [],
+    gameOver: false,
+    winner:null,
+    lastMove: null,
+    thinking:false,
+    resultShown:false,
+    buddy:'lion',
+    soundOn:true,
+    checkOwner:null,
+    bossName:pickBossHorse()
+  };
+
+  function cpuColor(){ return state.playerColor==='sente' ? 'gote' : 'sente'; }
+  function isCpuTurn(){ return state.mode==='cpu' && state.turn===cpuColor(); }
+
+  function pieceMoves(board, row, col){
+    const piece = board[row][col];
+    if(!piece) return [];
+    const moves = [];
+    const owner = piece.owner;
+    const type = piece.type;
+
+    if(type==='K' || type==='G' || isPromotedGoldLike(piece)){
+      for(const [dr,dc] of stepOffsets(type==='K'?'K':'G', owner)){
+        const r=row+dr, c=col+dc;
+        if(!inBounds(r,c)) continue;
+        const target = board[r][c];
+        if(!target || target.owner!==owner) moves.push({row:r,col:c,capture:!!target});
+      }
+      return moves;
+    }
+    if(type==='P' || type==='N' || type==='S'){
+      for(const [dr,dc] of stepOffsets(type, owner)){
+        const r=row+dr, c=col+dc;
+        if(!inBounds(r,c)) continue;
+        const target = board[r][c];
+        if(!target || target.owner!==owner) moves.push({row:r,col:c,capture:!!target});
+      }
+      return moves;
+    }
+    let dirs = [];
+    const f = forwardDir(owner);
+    if(type==='L'){
+      dirs = [[f,0]];
+    } else if(type==='B'){
+      dirs = [[1,1],[1,-1],[-1,1],[-1,-1]];
+    } else if(type==='R'){
+      dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+    }
+    for(const [dr,dc] of dirs){
+      let r=row+dr, c=col+dc;
+      while(inBounds(r,c)){
+        const target = board[r][c];
+        if(!target){
+          moves.push({row:r,col:c,capture:false});
+        } else {
+          if(target.owner!==owner) moves.push({row:r,col:c,capture:true});
+          break;
+        }
+        r+=dr; c+=dc;
+      }
+    }
+    if(piece.promoted && (type==='B' || type==='R')){
+      const extra = type==='B' ? [[1,0],[-1,0],[0,1],[0,-1]] : [[1,1],[1,-1],[-1,1],[-1,-1]];
+      for(const [dr,dc] of extra){
+        const r=row+dr, c=col+dc;
+        if(!inBounds(r,c)) continue;
+        const target = board[r][c];
+        if(!target || target.owner!==owner) moves.push({row:r,col:c,capture:!!target});
+      }
+    }
+    return moves;
+  }
+
+  function canDropAt(type, owner, row, col, board){
+    if(board[row][col]) return false;
+    if(type==='P' || type==='L'){
+      if(isLastRow(owner,row)) return false;
+    }
+    if(type==='N'){
+      if(isLastTwoRows(owner,row)) return false;
+    }
+    if(type==='P'){
+      for(let r=0;r<9;r++){
+        const p = board[r][col];
+        if(p && p.owner===owner && p.type==='P' && !p.promoted) return false;
+      }
+    }
+    return true;
+  }
+
+  function getDropTargetsFor(type, owner, board){
+    const targets = [];
+    for(let r=0;r<9;r++){
+      for(let c=0;c<9;c++){
+        if(canDropAt(type, owner, r, c, board)){
+          targets.push({row:r,col:c,capture:false});
+        }
+      }
+    }
+    return targets;
+  }
+
+  // ---------- AI helpers ----------
+  function pieceValue(piece){
+    if(piece.promoted && PROMOTED_VALUE[piece.type]!==undefined) return PROMOTED_VALUE[piece.type];
+    return PIECE_VALUE[piece.type];
+  }
+
+  function evaluateScore(board, captured){
+    let score=0;
+    for(let r=0;r<9;r++){
+      for(let c=0;c<9;c++){
+        const p = board[r][c];
+        if(!p) continue;
+        const v = pieceValue(p);
+        score += (p.owner==='sente' ? v : -v);
+      }
+    }
+    for(const type in captured.sente) score += PIECE_VALUE[type] * captured.sente[type];
+    for(const type in captured.gote) score -= PIECE_VALUE[type] * captured.gote[type];
+    return score;
+  }
+
+  function generateAllMoves(owner, board, captured){
+    const moves = [];
+    for(let r=0;r<9;r++){
+      for(let c=0;c<9;c++){
+        const piece = board[r][c];
+        if(!piece || piece.owner!==owner) continue;
+        const dests = pieceMoves(board,r,c);
+        for(const d of dests){
+          const mustPromote = ((piece.type==='P'||piece.type==='L') && isLastRow(owner,d.row))
+            || (piece.type==='N' && isLastTwoRows(owner,d.row));
+          const canPromote = !piece.promoted && !['G','K'].includes(piece.type) &&
+            (isPromotionZone(owner,r) || isPromotionZone(owner,d.row));
+          if(mustPromote){
+            moves.push({kind:'move',fromRow:r,fromCol:c,toRow:d.row,toCol:d.col,promote:true});
+          } else if(canPromote){
+            moves.push({kind:'move',fromRow:r,fromCol:c,toRow:d.row,toCol:d.col,promote:true});
+            moves.push({kind:'move',fromRow:r,fromCol:c,toRow:d.row,toCol:d.col,promote:false});
+          } else {
+            moves.push({kind:'move',fromRow:r,fromCol:c,toRow:d.row,toCol:d.col,promote:false});
+          }
+        }
+      }
+    }
+    for(const type of DROP_ORDER){
+      const cnt = captured[owner][type] || 0;
+      if(cnt<=0) continue;
+      const targets = getDropTargetsFor(type, owner, board);
+      for(const t of targets){
+        moves.push({kind:'drop', type, toRow:t.row, toCol:t.col});
+      }
+    }
+    return moves;
+  }
+
+  function cloneBoard(board){ return board.map(row=>row.map(cell=>cell?{...cell}:null)); }
+  function cloneCaptured(captured){ return {sente:{...captured.sente}, gote:{...captured.gote}}; }
+
+  function applyMoveClone(board, captured, owner, move){
+    const newBoard = cloneBoard(board);
+    const newCaptured = cloneCaptured(captured);
+    let capturedPiece = null;
+    if(move.kind==='move'){
+      const piece = newBoard[move.fromRow][move.fromCol];
+      capturedPiece = newBoard[move.toRow][move.toCol];
+      newBoard[move.toRow][move.toCol] = {type:piece.type, owner:piece.owner, promoted:piece.promoted || move.promote};
+      newBoard[move.fromRow][move.fromCol] = null;
+      if(capturedPiece){
+        newCaptured[owner][capturedPiece.type] = (newCaptured[owner][capturedPiece.type]||0)+1;
+      }
+    } else {
+      newBoard[move.toRow][move.toCol] = {type:move.type, owner, promoted:false};
+      newCaptured[owner][move.type] -= 1;
+      if(newCaptured[owner][move.type] <= 0) delete newCaptured[owner][move.type];
+    }
+    return {board:newBoard, captured:newCaptured, capturedPiece};
+  }
+
+  function shuffle(arr){
+    for(let i=arr.length-1;i>0;i--){
+      const j = Math.floor(Math.random()*(i+1));
+      [arr[i],arr[j]] = [arr[j],arr[i]];
+    }
+    return arr;
+  }
+
+  function minimax(board, captured, ownerToMove, depth, alpha, beta){
+    const moves = shuffle(generateAllMoves(ownerToMove, board, captured));
+    if(depth===0 || moves.length===0){
+      return {score: evaluateScore(board,captured), move:null};
+    }
+    const maximizing = ownerToMove==='sente';
+    let bestMove = null;
+    let bestScore = maximizing ? -Infinity : Infinity;
+    for(const move of moves){
+      const {board:nb, captured:nc, capturedPiece} = applyMoveClone(board, captured, ownerToMove, move);
+      let score;
+      if(capturedPiece && capturedPiece.type==='K'){
+        score = maximizing ? (WIN_SCORE + depth) : (-WIN_SCORE - depth);
+      } else {
+        const res = minimax(nb, nc, ownerToMove==='sente'?'gote':'sente', depth-1, alpha, beta);
+        score = res.score;
+      }
+      if(maximizing){
+        if(score > bestScore){ bestScore = score; bestMove = move; }
+        alpha = Math.max(alpha, bestScore);
+      } else {
+        if(score < bestScore){ bestScore = score; bestMove = move; }
+        beta = Math.min(beta, bestScore);
+      }
+      if(alpha >= beta) break;
+    }
+    return {score:bestScore, move:bestMove};
+  }
+
+  // ---------- rendering ----------
+  // ---------- 王手（check）判定と演出 ----------
+  function isInCheck(board, owner){
+    let kr=-1, kc=-1;
+    for(let r=0;r<9;r++){
+      for(let c=0;c<9;c++){
+        const p = board[r][c];
+        if(p && p.type==='K' && p.owner===owner){ kr=r; kc=c; }
+      }
+    }
+    if(kr<0) return false;
+    for(let r=0;r<9;r++){
+      for(let c=0;c<9;c++){
+        const p = board[r][c];
+        if(!p || p.owner===owner) continue;
+        const moves = pieceMoves(board, r, c);
+        if(moves.some(m=>m.row===kr && m.col===kc)) return true;
+      }
+    }
+    return false;
+  }
+
+  let checkBannerTimer = null;
+  function showCheckBanner(){
+    let el = document.getElementById('checkBanner');
+    if(!el){
+      // shogi.html が古くてもバナーが出るように、無ければ自動で作る
+      el = document.createElement('div');
+      el.id = 'checkBanner';
+      el.className = 'check-banner';
+      el.innerHTML = '<span>王手！</span>';
+      document.body.appendChild(el);
+    }
+    el.classList.remove('show');
+    void el.offsetWidth; // アニメーションを最初からやり直す
+    el.classList.add('show');
+    clearTimeout(checkBannerTimer);
+    checkBannerTimer = setTimeout(()=>el.classList.remove('show'), 1700);
+  }
+  function playCheckSound(){
+    if(!state.soundOn) return;
+    const ctx = getAudioCtx();
+    if(!ctx) return;
+    try{
+      const now = ctx.currentTime;
+      // 低いドスン
+      const o1 = ctx.createOscillator(); const g1 = ctx.createGain();
+      o1.type = 'sine';
+      o1.frequency.setValueAtTime(140, now);
+      o1.frequency.exponentialRampToValueAtTime(45, now+0.4);
+      g1.gain.setValueAtTime(0.0001, now);
+      g1.gain.exponentialRampToValueAtTime(0.7, now+0.02);
+      g1.gain.exponentialRampToValueAtTime(0.0001, now+0.5);
+      o1.connect(g1); g1.connect(ctx.destination);
+      o1.start(now); o1.stop(now+0.55);
+      // 鋭い警告音（2連）
+      [0.08, 0.26].forEach(dt=>{
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.type = 'square';
+        o.frequency.setValueAtTime(880, now+dt);
+        o.frequency.setValueAtTime(660, now+dt+0.07);
+        g.gain.setValueAtTime(0.0001, now+dt);
+        g.gain.exponentialRampToValueAtTime(0.22, now+dt+0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, now+dt+0.16);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(now+dt); o.stop(now+dt+0.18);
+      });
+    } catch(e){ /* ignore */ }
+  }
+  function announceCheckIfAny(){
+    if(state.gameOver) return;
+    if(isInCheck(state.board, state.turn)){
+      try{ showCheckBanner(); } catch(e){ /* 演出の失敗でゲームを止めない */ }
+      try{ playCheckSound(); } catch(e){ /* 同上 */ }
+    }
+  }
+
+  function render(){
+    state.checkOwner = (!state.gameOver && isInCheck(state.board, state.turn)) ? state.turn : null;
+    renderBoard();
+    renderMochigoma();
+    renderPanels();
+    renderStatus();
+    if(state.gameOver && !state.resultShown){
+      state.resultShown = true;
+      showResultModal();
+    }
+  }
+
+  function showResultModal(){
+    const outcome = state.mode==='cpu' ? (state.winner===state.playerColor ? 'win' : 'lose') : 'win';
+    const winnerLabel = state.winner==='sente' ? '先手' : '後手';
+
+    const box = document.getElementById('resultBox');
+    box.classList.remove('win','lose');
+    box.classList.add(outcome);
+
+    const titleEl = document.getElementById('resultTitle');
+    const subEl = document.getElementById('resultSub');
+    if(state.mode==='cpu'){
+      titleEl.textContent = outcome==='win' ? '🎉 やったね！かち！ 🎉' : '😢 まけちゃった…';
+      subEl.textContent = outcome==='win' ? `${winnerLabel}（あなた）のかち！` : `${winnerLabel}（${state.bossName.name}）のかち…`;
+    } else {
+      titleEl.textContent = '🎉 しょうぶあり！ 🎉';
+      subEl.textContent = `${winnerLabel}のかち！`;
+    }
+
+    const bossResultEl = document.getElementById('bossResult');
+    if(state.mode==='cpu' && state.bossName){
+      bossResultEl.style.display = '';
+      bossResultEl.classList.remove('win','lose');
+      bossResultEl.classList.add(outcome);
+      document.getElementById('bossResultLabel').textContent = outcome==='win' ? '👑 ボスをたおした！' : '👑 ボスには勝てなかった…';
+      document.getElementById('bossResultBadge').textContent = outcome==='win' ? '💥' : '🏆';
+      document.getElementById('bossResultName').textContent = state.bossName.name;
+      setBossBlackPhoto(document.getElementById('bossResultImg'));
+    } else {
+      bossResultEl.style.display = 'none';
+    }
+
+    const animalsEl = document.getElementById('resultAnimals');
+    animalsEl.innerHTML = '';
+    const supportingIds = ['lion','elephant','giraffe','zebra','bear','wolf','eagle','chick'];
+    const buddy = buddyById(state.buddy);
+    const list = supportingIds.filter(id=>id!==buddy.id).map(id=>buddyById(id));
+
+    const buddyCaptionEl = document.getElementById('buddyCaption');
+    buddyCaptionEl.textContent = `🐾 相棒の${buddy.icon} ${buddy.name}もいっしょに！`;
+
+    const heroEl = document.getElementById('buddyHero');
+    heroEl.classList.remove('celebrate','cry');
+    heroEl.classList.add(outcome==='win' ? 'celebrate' : 'cry');
+    setAnimalPhoto(document.getElementById('buddyHeroImg'), buddy.wiki, buddy.icon);
+    document.getElementById('buddyHeroBubble').textContent = outcome==='win' ? 'やったね！' : 'どんまい…';
+
+    list.forEach((a,i)=>{
+      const span = document.createElement('span');
+      span.className = 'anim-item photo ' + (outcome==='win' ? 'celebrate' : 'cry');
+      span.style.animationDelay = (i*0.08)+'s';
+      const img = document.createElement('img');
+      img.alt = a.name;
+      setAnimalPhoto(img, a.wiki, a.icon);
+      span.appendChild(img);
+      if(outcome==='lose'){
+        const tear = document.createElement('span');
+        tear.className='tear-drop';
+        tear.textContent='💧';
+        tear.style.animationDelay = (i*0.08+0.3)+'s';
+        span.appendChild(tear);
+      }
+      animalsEl.appendChild(span);
+    });
+
+    const confettiLayer = document.getElementById('confettiLayer');
+    confettiLayer.innerHTML = '';
+    if(outcome==='win'){
+      const pieces = ['🎉','✨','🎊','⭐'];
+      for(let i=0;i<18;i++){
+        const c = document.createElement('span');
+        c.className='confetti-piece';
+        c.textContent = pieces[Math.floor(Math.random()*pieces.length)];
+        c.style.left = Math.random()*100+'%';
+        c.style.animationDelay = (Math.random()*1.2)+'s';
+        c.style.animationDuration = (1.4+Math.random()*1.2)+'s';
+        confettiLayer.appendChild(c);
+      }
+    }
+
+    document.getElementById('resultModal').classList.add('open');
+  }
+
+  function renderPanels(){
+    document.getElementById('panel-sente').classList.toggle('active', state.turn==='sente' && !state.gameOver);
+    document.getElementById('panel-gote').classList.toggle('active', state.turn==='gote' && !state.gameOver);
+    const cc = state.mode==='cpu' ? cpuColor() : null;
+    const buddyIcon = buddyById(state.buddy).icon;
+    document.getElementById('tag-sente').textContent = state.mode==='cpu' ? (cc==='sente'?`👑 ${state.bossName.name}`:`${buddyIcon} あなた`) : '';
+    document.getElementById('tag-gote').textContent = state.mode==='cpu' ? (cc==='gote'?`👑 ${state.bossName.name}`:`${buddyIcon} あなた`) : '';
+  }
+
+  function renderStatus(){
+    const el = document.getElementById('status');
+    el.classList.remove('win','thinking');
+    if(state.gameOver){
+      const winnerIsPlayer = state.mode==='cpu' && state.winner===state.playerColor;
+      const winnerLabel = state.winner==='sente' ? '先手' : '後手';
+      if(state.mode==='cpu'){
+        el.textContent = winnerIsPlayer ? `🎉 ${winnerLabel}（あなた）の勝ち！` : `${winnerLabel}（${state.bossName.name}）の勝ち…`;
+      } else {
+        el.textContent = `🎉 ${winnerLabel}の勝ち！`;
+      }
+      el.classList.add('win');
+    } else if(state.thinking){
+      el.textContent = `${state.bossName.name}が考え中…🤔`;
+      el.classList.add('thinking');
+    } else {
+      const turnLabel = state.turn==='sente' ? '先手' : '後手';
+      if(state.mode==='cpu'){
+        el.textContent = state.turn===state.playerColor ? `${turnLabel}（あなた）の番です` : `${turnLabel}（${state.bossName.name}）の番です`;
+      } else {
+        el.textContent = `${turnLabel}の番です`;
+      }
+    }
+    if(!state.gameOver && state.checkOwner){ el.textContent += ' ⚠️王手！'; }
+    document.getElementById('board').classList.toggle('locked', state.thinking || isCpuTurn());
+  }
+
+  function makeKanjiSpan(piece){
+    const promoted = piece.promoted && KANJI_PROMOTED[piece.type];
+    let text;
+    if(promoted){
+      text = KANJI_PROMOTED[piece.type];
+    } else if(piece.type==='K'){
+      text = piece.owner==='sente' ? KANJI.K_sente : KANJI.K_gote;
+    } else {
+      text = KANJI[piece.type];
+    }
+    return {text, isTwoChar: text.length>1};
+  }
+
+  function renderBoard(){
+    const boardEl = document.getElementById('board');
+    boardEl.innerHTML = '';
+    for(let r=0;r<9;r++){
+      for(let c=0;c<9;c++){
+        const cell = document.createElement('div');
+        cell.className='cell';
+        cell.dataset.row=r; cell.dataset.col=c;
+
+        if(state.lastMove && state.lastMove.toRow===r && state.lastMove.toCol===c){
+          cell.classList.add('last-move');
+        }
+
+        const legal = state.legalTargets.find(t=>t.row===r && t.col===c);
+        if(legal){ cell.classList.add(legal.capture ? 'legal-capture' : 'legal'); }
+
+        const piece = state.board[r][c];
+        if(piece){
+          const komaEl = document.createElement('div');
+          komaEl.className = 'koma ' + piece.owner + (piece.promoted?' promoted':'') + (piece.type==='P'?' piece-pawn':'') + (piece.type==='K'?(piece.owner==='sente'?' piece-lion':' piece-horse'):'') + (piece.type==='G'?' piece-bear':'') + (piece.type==='S'?' piece-wolf':'') + (piece.type==='K' && state.checkOwner===piece.owner ? ' in-check':'');
+          if(state.selected && state.selected.kind==='board' && state.selected.row===r && state.selected.col===c){
+            komaEl.classList.add('selected');
+          }
+          const body = document.createElement('div');
+          body.className='body';
+          const {text, isTwoChar} = makeKanjiSpan(piece);
+          const span = document.createElement('span');
+          span.className = 'kanji' + (isTwoChar?' two-char':'');
+          span.textContent = text;
+          body.appendChild(span);
+          komaEl.appendChild(body);
+          const badge = document.createElement('span');
+          badge.className='animal-badge';
+          badge.textContent = ANIMAL_ICON[piece.type];
+          komaEl.appendChild(badge);
+          komaEl.addEventListener('click', (e)=>{ e.stopPropagation(); onCellClick(r,c); });
+          cell.appendChild(komaEl);
+        } else {
+          cell.addEventListener('click', ()=> onCellClick(r,c));
+        }
+        boardEl.appendChild(cell);
+      }
+    }
+  }
+
+  function renderMochigoma(){
+    for(const owner of ['sente','gote']){
+      const container = document.getElementById('mochi-'+owner);
+      container.innerHTML='';
+      for(const type of DROP_ORDER){
+        const count = state.captured[owner][type] || 0;
+        if(count<=0) continue;
+        const wrap = document.createElement('div');
+        wrap.className='komadai-piece';
+        if(state.selected && state.selected.kind==='hand' && state.selected.type===type && state.selected.owner===owner){
+          wrap.classList.add('selected');
+        }
+        const koma = document.createElement('div');
+        koma.className='koma '+owner+(type==='P'?' piece-pawn':'')+(type==='G'?' piece-bear':'')+(type==='S'?' piece-wolf':'');
+        const body = document.createElement('div');
+        body.className='body';
+        const span=document.createElement('span');
+        span.className='kanji';
+        span.textContent = KANJI[type];
+        body.appendChild(span);
+        koma.appendChild(body);
+        const badge = document.createElement('span');
+        badge.className='animal-badge';
+        badge.textContent = ANIMAL_ICON[type];
+        koma.appendChild(badge);
+        wrap.appendChild(koma);
+        if(count>1){
+          const cnt = document.createElement('div');
+          cnt.className='count';
+          cnt.textContent = count;
+          wrap.appendChild(cnt);
+        }
+        wrap.addEventListener('click', ()=> onHandClick(owner, type));
+        container.appendChild(wrap);
+      }
+    }
+  }
+
+  function clearSelection(){
+    state.selected = null;
+    state.legalTargets = [];
+  }
+
+  // ---------- interaction ----------
+  function onHandClick(owner, type){
+    if(state.gameOver || state.thinking || isCpuTurn()) return;
+    if(owner !== state.turn) return;
+    if(state.selected && state.selected.kind==='hand' && state.selected.type===type && state.selected.owner===owner){
+      clearSelection(); render(); return;
+    }
+    state.selected = {kind:'hand', type, owner};
+    state.legalTargets = getDropTargetsFor(type, owner, state.board);
+    render();
+  }
+
+  function onCellClick(row,col){
+    if(state.gameOver || state.thinking || isCpuTurn()) return;
+    const piece = state.board[row][col];
+
+    if(state.selected){
+      const target = state.legalTargets.find(t=>t.row===row && t.col===col);
+      if(target){
+        if(state.selected.kind==='board'){
+          performMove(state.selected.row, state.selected.col, row, col);
+        } else {
+          performDrop(state.selected.type, row, col);
+        }
+        return;
+      }
+      if(piece && piece.owner===state.turn){
+        selectBoardPiece(row,col);
+        return;
+      }
+      clearSelection(); render();
+      return;
+    }
+
+    if(piece && piece.owner===state.turn){
+      selectBoardPiece(row,col);
+    }
+  }
+
+  function selectBoardPiece(row,col){
+    state.selected = {kind:'board', row, col};
+    state.legalTargets = pieceMoves(state.board, row, col);
+    render();
+  }
+
+  function finishTurnCheckWin(capturedPiece, mover){
+    if(capturedPiece && capturedPiece.type==='K'){
+      state.gameOver = true;
+      state.winner = mover;
+      return true;
+    }
+    return false;
+  }
+
+  function applyMoveDirect(fromRow,fromCol,toRow,toCol,promote){
+    const board = state.board;
+    const piece = board[fromRow][fromCol];
+    const captured = board[toRow][toCol];
+    const mover = piece.owner;
+    playAnimalCry(piece.type);
+    board[toRow][toCol] = { type:piece.type, owner:piece.owner, promoted: piece.promoted || promote };
+    board[fromRow][fromCol] = null;
+    if(captured){
+      state.captured[mover][captured.type] = (state.captured[mover][captured.type]||0)+1;
+    }
+    state.lastMove = {fromRow,fromCol,toRow,toCol};
+    const won = finishTurnCheckWin(captured, mover);
+    clearSelection();
+    if(!won){ state.turn = mover==='sente' ? 'gote' : 'sente'; }
+    render();
+    if(!won) announceCheckIfAny();
+  }
+
+  function applyDropDirect(type,row,col,owner){
+    playAnimalCry(type);
+    state.board[row][col] = { type, owner, promoted:false };
+    state.captured[owner][type] -= 1;
+    if(state.captured[owner][type] <= 0) delete state.captured[owner][type];
+    state.lastMove = {fromRow:-1,fromCol:-1,toRow:row,toCol:col};
+    clearSelection();
+    state.turn = owner==='sente' ? 'gote' : 'sente';
+    render();
+    announceCheckIfAny();
+  }
+
+  function performMove(fromRow, fromCol, toRow, toCol){
+    const piece = state.board[fromRow][fromCol];
+    const mustPromote = ((piece.type==='P' || piece.type==='L') && isLastRow(piece.owner,toRow))
+      || (piece.type==='N' && isLastTwoRows(piece.owner,toRow));
+    const canPromote = !piece.promoted && !['G','K'].includes(piece.type) &&
+      (isPromotionZone(piece.owner, fromRow) || isPromotionZone(piece.owner, toRow));
+
+    if(mustPromote){
+      applyMoveDirect(fromRow,fromCol,toRow,toCol,true);
+      afterHumanMove();
+      return;
+    }
+    if(canPromote){
+      openPromotionModal((doPromote)=>{
+        applyMoveDirect(fromRow,fromCol,toRow,toCol,doPromote);
+        afterHumanMove();
+      });
+      return;
+    }
+    applyMoveDirect(fromRow,fromCol,toRow,toCol,false);
+    afterHumanMove();
+  }
+
+  function performDrop(type, row, col){
+    applyDropDirect(type, row, col, state.turn);
+    afterHumanMove();
+  }
+
+  function afterHumanMove(){
+    if(!state.gameOver && isCpuTurn()){
+      scheduleCPUMove();
+    }
+  }
+
+  function scheduleCPUMove(){
+    state.thinking = true;
+    render();
+    setTimeout(doCPUMove, 420);
+  }
+
+  function doCPUMove(){
+    if(state.gameOver){ state.thinking=false; render(); return; }
+    const owner = cpuColor();
+    let move = null;
+    if(state.difficulty==='easy'){
+      const moves = generateAllMoves(owner, state.board, state.captured);
+      if(moves.length){
+        const captures = moves.filter(m=>{
+          if(m.kind!=='move') return false;
+          const t = state.board[m.toRow][m.toCol];
+          return !!t;
+        });
+        const pool = (captures.length && Math.random()<0.5) ? captures : moves;
+        move = pool[Math.floor(Math.random()*pool.length)];
+      }
+    } else {
+      const depth = state.difficulty==='hard' ? 2 : 1;
+      const result = minimax(state.board, state.captured, owner, depth, -Infinity, Infinity);
+      move = result.move;
+      if(!move){
+        const moves = generateAllMoves(owner, state.board, state.captured);
+        move = moves.length ? moves[Math.floor(Math.random()*moves.length)] : null;
+      }
+    }
+
+    state.thinking = false;
+
+    if(!move){
+      state.gameOver = true;
+      state.winner = owner==='sente' ? 'gote' : 'sente';
+      render();
+      return;
+    }
+
+    if(move.kind==='move'){
+      applyMoveDirect(move.fromRow, move.fromCol, move.toRow, move.toCol, move.promote);
+    } else {
+      applyDropDirect(move.type, move.toRow, move.toCol, owner);
+    }
+  }
+
+  function openPromotionModal(callback){
+    const modal = document.getElementById('promoModal');
+    modal.classList.add('open');
+    const yesBtn = document.getElementById('promoYes');
+    const noBtn = document.getElementById('promoNo');
+    function cleanup(){
+      modal.classList.remove('open');
+      yesBtn.removeEventListener('click', onYes);
+      noBtn.removeEventListener('click', onNo);
+    }
+    function onYes(){ cleanup(); callback(true); }
+    function onNo(){ cleanup(); callback(false); }
+    yesBtn.addEventListener('click', onYes);
+    noBtn.addEventListener('click', onNo);
+  }
+
+  // ---------- setup / reset ----------
+  function readSettings(){
+    state.mode = document.getElementById('modeSelect').value;
+    state.playerColor = document.getElementById('colorSelect').value;
+    state.difficulty = document.getElementById('difficultySelect').value;
+  }
+
+  function updateSettingsVisibility(){
+    const mode = document.getElementById('modeSelect').value;
+    document.getElementById('colorField').style.display = mode==='cpu' ? 'flex' : 'none';
+    document.getElementById('difficultyField').style.display = mode==='cpu' ? 'flex' : 'none';
+  }
+
+  function resetGame(){
+    readSettings();
+    state.board = freshBoard();
+    state.turn = 'sente';
+    state.captured = { sente:{}, gote:{} };
+    state.selected = null;
+    state.legalTargets = [];
+    state.gameOver = false;
+    state.winner = null;
+    state.lastMove = null;
+    state.thinking = false;
+    state.resultShown = false;
+    state.bossName = state.mode==='cpu' ? pickBossHorse() : null;
+    document.getElementById('resultModal').classList.remove('open');
+    render();
+    if(state.mode==='cpu'){
+      showBossIntro(()=>{
+        if(isCpuTurn()){ scheduleCPUMove(); }
+      });
+    } else if(isCpuTurn()){
+      scheduleCPUMove();
+    }
+  }
+
+  function showBossIntro(onDone){
+    const boss = state.bossName;
+    document.getElementById('bossIntroName').textContent = boss.name;
+    setBossBlackPhoto(document.getElementById('bossIntroImg'));
+    const modal = document.getElementById('bossIntroModal');
+    modal.classList.add('open');
+    const btn = document.getElementById('bossIntroStartBtn');
+    function onStart(){
+      modal.classList.remove('open');
+      btn.removeEventListener('click', onStart);
+      if(onDone) onDone();
+    }
+    btn.addEventListener('click', onStart);
+  }
+
+  function renderBuddyBtn(){
+    const b = buddyById(state.buddy);
+    document.getElementById('buddyBtn').textContent = `${b.icon} ${b.name}`;
+  }
+
+  function renderBuddyGrid(){
+    const grid = document.getElementById('buddyGrid');
+    grid.innerHTML = '';
+    BUDDY_LIST.forEach(b=>{
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'buddy-card' + (state.buddy===b.id ? ' selected' : '');
+      const iconSpan = document.createElement('span');
+      iconSpan.className='buddy-icon';
+      iconSpan.textContent = b.icon;
+      const nameSpan = document.createElement('span');
+      nameSpan.className='buddy-name';
+      nameSpan.textContent = b.name;
+      card.appendChild(iconSpan);
+      card.appendChild(nameSpan);
+      card.addEventListener('click', ()=>{
+        state.buddy = b.id;
+        renderBuddyBtn();
+        renderBuddyGrid();
+        renderPanels();
+        document.getElementById('buddyModal').classList.remove('open');
+      });
+      grid.appendChild(card);
+    });
+  }
+
+  document.getElementById('buddyBtn').addEventListener('click', ()=>{
+    renderBuddyGrid();
+    document.getElementById('buddyModal').classList.add('open');
+  });
+  document.getElementById('buddyCloseBtn').addEventListener('click', ()=>{
+    document.getElementById('buddyModal').classList.remove('open');
+  });
+
+  document.getElementById('resetBtn').addEventListener('click', resetGame);
+  document.getElementById('applyBtn').addEventListener('click', resetGame);
+  document.getElementById('modeSelect').addEventListener('change', updateSettingsVisibility);
+  document.getElementById('playAgainBtn').addEventListener('click', resetGame);
+  document.getElementById('soundToggleBtn').addEventListener('click', ()=>{
+    state.soundOn = !state.soundOn;
+    document.getElementById('soundToggleBtn').textContent = state.soundOn ? '🔊 音' : '🔇 音';
+    if(state.soundOn){ getAudioCtx(); }
+  });
+
+  ['pointerdown','click','keydown','touchstart'].forEach(evName=>{
+    document.addEventListener(evName, getAudioCtx, {once:true, passive:true});
+  });
+
+  updateSettingsVisibility();
+  renderBuddyBtn();
+  render();
+})();

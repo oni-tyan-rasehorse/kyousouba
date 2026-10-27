@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>アニマルズのお将棋トレーニング</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@500;700;800&family=Shippori+Mincho:wght@600&family=Dela+Gothic+One&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="title-block">
+    <h1>🐴 アニマルズのお将棋トレーニング 🐘</h1>
+    <p>競走馬をぶったおせ！！</p>
+    <div class="legend">
+      <span>🐴王</span><span>🐘角</span><span>🦅飛</span><span>🐻金</span>
+      <span>🐺銀</span><span>🦓桂</span><span>🦒香</span><span>🐣歩</span>
+    </div>
+  </div>
+
+  <div class="settings-bar">
+    <div class="field">
+      <label for="modeSelect">対戦相手</label>
+      <select id="modeSelect">
+        <option value="cpu">敵アニマル</option>
+        <option value="pvp">2人で対戦</option>
+      </select>
+    </div>
+    <div class="field" id="colorField">
+      <label for="colorSelect">あなたの手番</label>
+      <select id="colorSelect">
+        <option value="sente">先手</option>
+        <option value="gote">後手</option>
+      </select>
+    </div>
+    <div class="field" id="difficultyField">
+      <label for="difficultySelect">敵アニマルの強さ</label>
+      <select id="difficultySelect">
+        <option value="easy">弱い</option>
+        <option value="normal" selected>普通</option>
+        <option value="hard">強い</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>相棒</label>
+      <button class="buddy-btn" id="buddyBtn" type="button">🦁 ライオン</button>
+    </div>
+    <button class="apply-btn" id="applyBtn">この設定で対局開始</button>
+  </div>
+
+  <div class="game-area">
+    <div class="side-panel" id="panel-gote">
+      <div class="who">
+        <span class="label"><span class="dot"></span>後手</span>
+        <span class="tag" id="tag-gote"></span>
+      </div>
+      <div class="mochigoma" id="mochi-gote"></div>
+    </div>
+
+    <div>
+      <div class="board-frame">
+        <div class="board" id="board"></div>
+      </div>
+      <div class="controls">
+        <button class="reset-btn" id="resetBtn"> はじめから</button>
+        <button class="reset-btn" id="soundToggleBtn" type="button">🔊 音</button>
+      </div>
+      <div class="status" id="status"></div>
+    </div>
+
+    <div class="side-panel" id="panel-sente">
+      <div class="who">
+        <span class="label"><span class="dot"></span>先手</span>
+        <span class="tag" id="tag-sente"></span>
+      </div>
+      <div class="mochigoma" id="mochi-sente"></div>
+    </div>
+  </div>
+</div>
+
+<div class="promo-modal" id="promoModal">
+  <div class="promo-box">
+    <p>成りますか？</p>
+    <div class="row">
+      <button id="promoYes">成る</button>
+      <button id="promoNo">成らない</button>
+    </div>
+  </div>
+</div>
+
+<div class="result-modal" id="resultModal">
+  <div class="result-box" id="resultBox">
+    <div class="confetti-layer" id="confettiLayer"></div>
+    <div class="boss-result" id="bossResult">
+      <p class="boss-result-label" id="bossResultLabel"></p>
+      <div class="boss-result-photo-wrap">
+        <img id="bossResultImg" alt="ボス">
+        <span class="boss-result-badge" id="bossResultBadge"></span>
+      </div>
+      <p class="boss-result-name" id="bossResultName"></p>
+    </div>
+    <div class="buddy-hero" id="buddyHero">
+      <img id="buddyHeroImg" alt="相棒">
+      <span class="buddy-hero-bubble" id="buddyHeroBubble"></span>
+    </div>
+    <p class="buddy-caption" id="buddyCaption"></p>
+    <div class="result-animals" id="resultAnimals"></div>
+    <p class="result-title" id="resultTitle"></p>
+    <p class="result-sub" id="resultSub"></p>
+    <button class="btn-again" id="playAgainBtn">🔄 もう一度あそぶ</button>
+  </div>
+</div>
+
+<div class="buddy-modal" id="buddyModal">
+  <div class="buddy-box">
+    <p class="buddy-modal-title">🐾 相棒をえらぼう！</p>
+    <div class="buddy-grid" id="buddyGrid"></div>
+    <button class="reset-btn" id="buddyCloseBtn">とじる</button>
+  </div>
+</div>
+
+<div class="boss-intro-modal" id="bossIntroModal">
+  <div class="boss-intro-box" id="bossIntroBox">
+    <div class="boss-intro-rays"></div>
+    <p class="boss-intro-label">👑 BOSS 登場！</p>
+    <div class="boss-intro-photo-wrap">
+      <img id="bossIntroImg" alt="ボス">
+    </div>
+    <p class="boss-intro-name" id="bossIntroName"></p>
+    <p class="boss-intro-sub">きみの相棒と勝負だ！</p>
+    <button class="btn-fight" id="bossIntroStartBtn">⚔️ たたかう！</button>
+  </div>
+</div>
+
+<div class="check-banner" id="checkBanner"><span>王手！</span></div>
+
+<script src="script.js"></script>
+</body>
+</html>
